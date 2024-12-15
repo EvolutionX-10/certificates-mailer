@@ -1,0 +1,12 @@
+{
+	"compilerOptions": {
+		"baseUrl": ".",
+		"paths": {
+			"@/*": ["src/*"],
+			"@utils": ["src/utils/index.ts"]
+		},
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		"module": "NodeNext"
+	}
+}

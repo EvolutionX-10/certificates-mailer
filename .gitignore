@@ -1,0 +1,10 @@
+# node modules
+node_modules/
+
+*.csv
+*.env
+stats/
+pdf/
+image/
+assets/
+templates/**
