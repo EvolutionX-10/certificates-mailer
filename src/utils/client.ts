@@ -1,34 +1,41 @@
-import { createTransport, Transporter } from "nodemailer";
+import { createTransport, type Transporter } from "nodemailer";
 import { compile } from "handlebars";
 import { greenBright, redBright, yellowBright } from "colorette";
 import { Stopwatch } from "@sapphire/stopwatch";
-import { parseData, ParsedData } from "./parseData.ts";
+import { join } from "node:path";
+import { parseData, validateRecipient, type ParsedData } from "./parseData.ts";
 import { FileUtil } from "./fileUtil.ts";
 import { AssetGenerator } from "./assetGenerator.ts";
+import { assetPath } from "./assetPath.ts";
+import { requiredEnv } from "./config.ts";
 
 export class Client {
 	public transport: Transporter;
 	public testMode = true;
-	public data: ParsedData[];
+	public data?: ParsedData[];
 	public parserFn: (data: Record<string, string>) => ParsedData;
 
 	public constructor({ parserFn }: { parserFn: (data: Record<string, string>) => ParsedData }) {
+		const port = Number(process.env.SMTP_PORT || "587");
+		if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("SMTP_PORT must be between 1 and 65535");
+		const secureSetting = process.env.SMTP_SECURE;
+		if (secureSetting && secureSetting !== "true" && secureSetting !== "false") {
+			throw new Error("SMTP_SECURE must be true or false");
+		}
+		const secure = secureSetting ? secureSetting === "true" : port === 465;
 		this.transport = createTransport({
-			host: process.env.HOST,
+			host: requiredEnv("SMTP_HOST"),
+			port,
+			secure,
+			requireTLS: !secure,
 			pool: true,
-			auth: {
-				user: process.env.USER,
-				pass: process.env.PASS,
-			},
-			tls: {
-				ciphers: "SSLv3",
-			},
+			auth: { user: requiredEnv("SMTP_USER"), pass: requiredEnv("SMTP_PASS", false) },
 		});
 		this.parserFn = parserFn;
 	}
 
 	public async setTestMode(mode: boolean) {
-		if (mode === false) {
+		if (!mode) {
 			console.log(`${yellowBright("[WARN]")} Test Mode is set to false! Proceeding in 5s...`);
 			await new Promise((resolve) => setTimeout(resolve, 5000));
 		}
@@ -42,105 +49,65 @@ export class Client {
 	public async generateAssets(type: "img" | "pdf" | "both") {
 		await this.getData();
 		const watch = new Stopwatch();
-		await AssetGenerator.generateAsset(type, this.data, this.testMode);
+		await AssetGenerator.generateAsset(type, this.data!, this.testMode);
 		console.log(`${greenBright("[INFO]")} Asset Generation Time taken: ${watch.stop()}`);
 	}
 
-	/**
-	 * Sends an email to the given email address
-	 * @param data The data to be sent
-	 * @param body The body of the email
-	 * @param attachment Whether to attach the PDF or not
-	 */
-	public async send<T extends string | Record<string, string> = string>(data: ParsedData, body: T, attachment = false) {
-		if (!process.env.SUBJECT) throw new Error("Subject not set");
-
-		const identifier = data.email.split("@")[0];
-
-		return this.transport
-			.sendMail({
-				from: process.env.FROM,
-				to: data.email,
-				subject: process.env.SUBJECT,
-				html: typeof body === "string" ? body : compile(FileUtil.read(process.env.TEMPLATE_FILE))(body),
-				attachments: attachment
-					? [
-							{
-								filename: `${data.name}.pdf`,
-								contentType: "application/pdf",
-								path: `./pdf/${identifier}.pdf`,
-							},
-					  ]
-					: [],
-			})
-			.then((d) => {
-				if (d.accepted.length > 0) {
-					FileUtil.append("./stats/accepted.txt", data.email + "\n");
-					console.log(`${greenBright("[SUCCESS]")} ${data.email}`);
-				} else if (d.rejected.length > 0) {
-					FileUtil.append("./stats/rejected.txt", data.email + "\n");
-					console.log(`${redBright("[FAILED]")} ${data.email}`);
-				}
-			})
-			.catch((e) => {
-				FileUtil.append("./stats/rejected.txt", data.email + "\n");
-				console.log(`${redBright("[FAILED]")} ${data.email}`);
-				console.log(e);
-			});
+	private statsPath(status: "accepted" | "rejected") {
+		return join(process.env.STATS_DIR || "./stats", `${this.testMode ? "test-" : ""}${status}.txt`);
 	}
 
-	/**
-	 * Bulk sends emails to the given data
-	 * @param body Extra data to be passed in body (like attributes to be parsed in email content)
-	 * @param attachment Attachments to be sent or not
-	 * @example
-	 * ```ts
-	 * await client.sendBulk({ event: "Hello World" }, true);
-	 * ```
-	 */
-	public async sendBulk(body?: Record<string, string>, attachment = false) {
-		await this.getData();
-		const watch = new Stopwatch();
-		if (this.testMode) {
-			await this.send(
-				{
-					name: process.env.TEST_NAME,
-					email: process.env.TEST_EMAIL,
-				},
-				{ name: process.env.TEST_NAME.split(" ")[0], ...body },
-				attachment
-			);
-			console.log(`${greenBright("[INFO]")} Test Emailing Time taken: ${watch.stop()}`);
-			return;
+	/** Send one recipient; in test mode only TEST_EMAIL is allowed. Failures reject. */
+	public async send(data: ParsedData, body: string | Record<string, string>, attachment = false) {
+		data = validateRecipient(data);
+		if (this.testMode && data.email !== requiredEnv("TEST_EMAIL")) {
+			throw new Error("Test mode only permits sending to TEST_EMAIL");
 		}
+		try {
+			const result = await this.transport.sendMail({
+				from: requiredEnv("FROM"),
+				to: { name: data.name, address: data.email },
+				subject: requiredEnv("SUBJECT"),
+				html: typeof body === "string" ? body : compile(FileUtil.read(requiredEnv("TEMPLATE_FILE")))(body),
+				attachments: attachment
+					? [{ filename: "certificate.pdf", contentType: "application/pdf", path: assetPath(data.email, "pdf") }]
+					: [],
+			});
+			if (!result.accepted?.length) throw new Error(`SMTP server did not accept ${data.email}`);
+			FileUtil.append(this.statsPath("accepted"), data.email + "\n");
+			console.log(`${greenBright("[SUCCESS]")} ${data.email}`);
+		} catch (error) {
+			FileUtil.append(this.statsPath("rejected"), data.email + "\n");
+			console.error(`${redBright("[FAILED]")} ${data.email}`);
+			throw error;
+		}
+	}
 
-		const accepted = FileUtil.read("./stats/accepted.txt").split("\n");
-		const promises = [];
-		for (let i = 0; i < this.data.length; i++) {
-			if (!accepted.includes(this.data[i].email)) {
-				promises.push(
-					this.send(
-						this.data[i],
-						{
-							name: this.data[i].name.split(" ")[0],
-							...body,
-						},
-						attachment
-					)
-				);
-			} else {
-				console.log(`${yellowBright("[SKIPPED]")} ${this.data[i].email}`);
+	/** Reuse generated recipients, skip accepted live recipients, and report all failures. */
+	public async sendBulk(body: Record<string, string> = {}, attachment = false) {
+		if (!this.data) await this.getData();
+		const watch = new Stopwatch();
+		const recipients = this.testMode
+			? [validateRecipient({ name: requiredEnv("TEST_NAME"), email: requiredEnv("TEST_EMAIL") })]
+			: this.data!;
+		const accepted = new Set(this.testMode ? [] : FileUtil.readOptional(this.statsPath("accepted")).split(/\r?\n/));
+		const errors: unknown[] = [];
+		for (const recipient of recipients) {
+			if (accepted.has(recipient.email)) {
+				console.log(`${yellowBright("[SKIPPED]")} ${recipient.email}`);
+				continue;
+			}
+			try {
+				await this.send(recipient, { ...body, name: recipient.name.split(" ")[0] }, attachment);
+			} catch (error) {
+				errors.push(error);
 			}
 		}
-		await Promise.all(promises);
-		await this.close();
 		console.log(`${greenBright("[INFO]")} Emailing Time taken: ${watch.stop()}`);
+		if (errors.length) throw new AggregateError(errors, `${errors.length} email(s) failed`);
 	}
 
-	/**
-	 * Closes the connection to the email server
-	 */
 	public async close() {
-		return this.transport.close();
+		this.transport.close();
 	}
 }

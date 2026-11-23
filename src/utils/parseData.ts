@@ -1,35 +1,49 @@
 import { parse } from "csv-parse";
-import { readFileSync } from "fs";
-
-/**
- * Parses the csv file and returns an array of objects containing name and email
- * @param parserFn The function to parse the data
- */
-export async function parseData(parserFn: (data: Record<string, string>) => ParsedData) {
-	const csv = readFileSync(process.env.CSV_FILE);
-	return new Promise<Record<string, string>[]>((resolve, reject) => {
-		parse(csv, { columns: true }, (err, data) => {
-			if (err) reject(err);
-			else resolve(data);
-		});
-	}).then((data) => data.map(parserFn).map(({ name, email }) => ({ name: parseName(name), email })));
-}
-
-/**
- * Parses the full name into a proper name
- * @param fullName The full name to be parsed
- */
-export function parseName(fullName: string): string {
-	const name = fullName.split(" ");
-	if (name.length > 2) {
-		const firstName = name[0].charAt(0).toUpperCase() + name[0].slice(1).toLowerCase();
-		const lastName = name[name.length - 1].charAt(0).toUpperCase() + name[name.length - 1].slice(1).toLowerCase();
-		return firstName + " " + lastName;
-	}
-	return name.map((n) => n.charAt(0).toUpperCase() + n.slice(1).toLowerCase()).join(" ");
-}
+import { readFileSync } from "node:fs";
+import { requiredEnv } from "./config.ts";
 
 export interface ParsedData {
 	name: string;
 	email: string;
+}
+
+export function validateRecipient(data: ParsedData): ParsedData {
+	const name = typeof data.name === "string" ? parseName(data.name) : "";
+	const email = typeof data.email === "string" ? data.email.trim() : "";
+	// Accept a single bare mailbox, never display-name or address-list syntax.
+	const mailbox =
+		/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+	const local = email.split("@")[0];
+	if (!name || !mailbox.test(email) || local.startsWith(".") || local.endsWith(".") || local.includes("..")) {
+		throw new Error("Each recipient must have a name and a valid email address; check CSV headers and test settings");
+	}
+	return { name, email };
+}
+
+/** Validate the entire CSV before generating certificates or sending mail. */
+export async function parseData(parserFn: (data: Record<string, string>) => ParsedData): Promise<ParsedData[]> {
+	const csv = readFileSync(requiredEnv("CSV_FILE"));
+	const rows = await new Promise<Record<string, string>[]>((resolve, reject) => {
+		parse<Record<string, string>>(
+			csv,
+			{ columns: true, bom: true, skip_empty_lines: true, trim: true },
+			(err, data) => {
+				if (err) reject(err);
+				else resolve(data);
+			},
+		);
+	});
+	const recipients = rows.map((row) => validateRecipient(parserFn(row)));
+	if (!recipients.length) throw new Error("CSV contains no recipients");
+	const seen = new Set<string>();
+	for (const { email } of recipients) {
+		if (seen.has(email)) throw new Error(`Duplicate recipient in CSV: ${email}`);
+		seen.add(email);
+	}
+	return recipients;
+}
+
+/** Preserve the supplied spelling and all name components. */
+export function parseName(fullName: string): string {
+	return fullName.trim().replace(/\s+/g, " ");
 }

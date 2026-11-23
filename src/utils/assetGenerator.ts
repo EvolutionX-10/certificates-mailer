@@ -1,7 +1,9 @@
 import { greenBright } from "colorette";
 import { genImg } from "./genImg.ts";
 import { genPDF } from "./genPDF.ts";
-import type { ParsedData } from "./parseData.ts";
+import { validateRecipient, type ParsedData } from "./parseData.ts";
+import { assetPath } from "./assetPath.ts";
+import { requiredEnv } from "./config.ts";
 
 export class AssetGenerator {
 	public static async generateImg(path: string, text: string) {
@@ -12,54 +14,22 @@ export class AssetGenerator {
 		await genPDF(path, text);
 	}
 
-	/**
-	 * Generates Assets to be sent with Email
-	 * @param type What type should the asset be of?
-	 * @param data Parsed Data
-	 * @param test Whether you want to see random samples first
-	 */
+	/** Generate one recipient at a time to keep memory bounded for large CSVs. */
 	public static async generateAsset(type: "img" | "pdf" | "both", data: ParsedData[], test = true) {
-		if (test) {
-			data = this.getTestData(data);
-		}
-		let promises = [];
-		switch (type) {
-			case "img":
-				promises = [];
-				for (const d of data) {
-					const identifier = d.email.split("@")[0];
-					promises.push(genImg(`${process.env.OUTPUT_IMG}${identifier}.png`, d.name));
-					console.log(`${greenBright("[SUCCESS]")} Generated image for ${d.name}`);
-				}
-				await Promise.all(promises);
-				break;
-			case "pdf":
-				promises = [];
-				for (const d of data) {
-					const identifier = d.email.split("@")[0];
-					promises.push(genPDF(`${process.env.OUTPUT_PDF}${identifier}.pdf`, d.name));
-					console.log(`${greenBright("[SUCCESS]")} Generated pdf for ${d.name}`);
-				}
-				await Promise.all(promises);
-				break;
-			case "both":
-				promises = [];
-				for (const d of data) {
-					const identifier = d.email.split("@")[0];
-					promises.push(genImg(`${process.env.OUTPUT_IMG}${identifier}.png`, d.name));
-					promises.push(genPDF(`${process.env.OUTPUT_PDF}${identifier}.pdf`, d.name));
-					console.log(`${greenBright("[SUCCESS]")} Generated image and pdf for ${d.name}`);
-				}
-				await Promise.all(promises);
-				break;
+		if (test) data = this.getTestData(data);
+		for (const recipient of data) {
+			if (type === "img" || type === "both") await genImg(assetPath(recipient.email, "img"), recipient.name);
+			if (type === "pdf" || type === "both") await genPDF(assetPath(recipient.email, "pdf"), recipient.name);
+			console.log(`${greenBright("[SUCCESS]")} Generated ${type} for ${recipient.name}`);
 		}
 	}
 
 	private static getTestData(data: ParsedData[]): ParsedData[] {
-		data = data.sort(() => Math.random() - Math.random()).slice(0, 3);
-		if (!data.some((r) => r.name === process.env.TEST_NAME)) {
-			data.push({ name: process.env.TEST_NAME, email: process.env.TEST_EMAIL });
-		}
-		return data;
+		const recipient = validateRecipient({ name: requiredEnv("TEST_NAME"), email: requiredEnv("TEST_EMAIL") });
+		const samples = [...data]
+			.sort(() => Math.random() - 0.5)
+			.filter((d) => d.email !== recipient.email)
+			.slice(0, 3);
+		return [...samples, recipient];
 	}
 }
