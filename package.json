@@ -7,7 +7,8 @@
 	"scripts": {
 		"start": "bun src/index.ts",
 		"test": "bun test",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "bun --bun tsc --noEmit",
+		"typecheck:watch": "bun run typecheck --watch"
 	},
 	"repository": "https://github.com/EvolutionX-10/certificates-mailer",
 	"author": "EvolutionX-10",
@@ -16,7 +17,7 @@
 		"@types/bun": "^1.4.5",
 		"@types/node": "^26.6.6",
 		"@types/nodemailer": "^8.0.2",
-		"typescript": "^7.0.2"
+		"typescript": "7.0.2"
 	},
 	"dependencies": {
 		"@pdf-lib/fontkit": "^1.1.1",

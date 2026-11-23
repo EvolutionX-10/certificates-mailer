@@ -1,6 +1,6 @@
 # Certificates Mailer
 
-Generate personalized PDF or PNG certificates from a CSV, then email PDF certificates through your SMTP provider. Built with [Bun](https://bun.sh/), TypeScript, Nodemailer, pdf-lib, Sharp, and Handlebars.
+Generate personalized PDF or PNG certificates from a CSV, then email PDF certificates through your SMTP provider. Built with [Bun](https://bun.sh/), TypeScript 7, Nodemailer, pdf-lib, Sharp, and Handlebars.
 
 The default entrypoint generates sample PDFs and sends **one real email to `TEST_EMAIL`**. Live bulk delivery must be enabled explicitly in `src/index.ts`.
 
@@ -120,7 +120,18 @@ bun test
 bun audit
 ```
 
-CI runs these checks on Ubuntu with the pinned Bun version. Tests cover CSV validation, PDF/PNG generation, real MIME attachment composition, test-recipient isolation, delivery failures, and retry logs. Live SMTP delivery still needs a test with your provider and credentials.
+### TypeScript 7 tooling
+
+The project uses the stable **TypeScript 7.0.2 native compiler**, pinned in `package.json` and `bun.lock`. `bun run typecheck` runs the installed `tsc` launcher through Bun, which invokes TypeScript's platform-specific native executable. A separate Node.js installation is not required for this command. Keep optional dependencies enabled when installing: they include the compiler binary for your operating system and architecture.
+
+```sh
+bun run typecheck --version  # Version 7.0.2
+bun run typecheck:watch      # Recheck when source or test files change
+```
+
+Type checking covers `src/`, `tests/`, and the environment declarations in `types/` using `tsconfig.json`. It does not emit JavaScript; Bun executes the TypeScript application directly via `bun start`. Bun's runtime transpilation does not replace the compiler's type checks.
+
+CI runs the development checks and prints the TypeScript compiler version on Ubuntu with the pinned Bun version. Tests cover CSV validation, PDF/PNG generation, real MIME attachment composition, test-recipient isolation, delivery failures, and retry logs. Live SMTP delivery still needs a test with your provider and credentials.
 
 | Path                                         | Responsibility                                         |
 | -------------------------------------------- | ------------------------------------------------------ |
