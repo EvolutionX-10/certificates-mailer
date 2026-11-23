@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import { writeFileSync, readFileSync, appendFileSync, existsSync, mkdirSync } from "fs";
 
 export class FileUtil {
@@ -7,6 +8,7 @@ export class FileUtil {
 	 * @param data The data to write
 	 */
 	public static write(path: string, data: string) {
+		this.ensureDir(dirname(path));
 		writeFileSync(path, data);
 	}
 
@@ -24,7 +26,12 @@ export class FileUtil {
 	 * @param data The data to append
 	 */
 	public static append(path: string, data: string) {
+		this.ensureDir(dirname(path));
 		appendFileSync(path, data);
+	}
+
+	public static readOptional(path: string) {
+		return existsSync(path) ? this.read(path) : "";
 	}
 
 	/**
@@ -32,6 +39,6 @@ export class FileUtil {
 	 * @param path The path to the directory
 	 */
 	public static ensureDir(path: string) {
-		if (!existsSync(path)) mkdirSync(path);
+		mkdirSync(path, { recursive: true });
 	}
 }
