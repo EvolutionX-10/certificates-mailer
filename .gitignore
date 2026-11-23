@@ -3,6 +3,8 @@ node_modules/
 
 *.csv
 *.env
+.env*
+!.env.example
 stats/
 pdf/
 image/

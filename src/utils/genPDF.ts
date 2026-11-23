@@ -1,42 +1,28 @@
-import { Color, PDFDocument, rgb } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import fonts from "@pdf-lib/fontkit";
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { FileUtil } from "./fileUtil.ts";
+import { fontSize, requiredEnv } from "./config.ts";
 
-/**
- * Generates a PDF file with the given text written on it
- * @param output Output PDF file path
- * @param text Text to be written on the PDF
- */
+/** Render a name on the first page of a PDF certificate. */
 export async function genPDF(output: string, text: string) {
-	FileUtil.ensureDir(process.env.OUTPUT_PDF);
-	const font = readFileSync(`./assets/${process.env.FONT}.ttf`);
-
-	const pdfDoc = await PDFDocument.load(readFileSync(process.env.BASE_PDF));
+	const pdfDoc = await PDFDocument.load(readFileSync(requiredEnv("BASE_PDF")));
 	pdfDoc.registerFontkit(fonts);
-
-	const pages = pdfDoc.getPages();
-	const firstPage = pages[0];
-	const fontSize = +process.env.FONT_SIZE;
-
+	const fontName = requiredEnv("FONT");
+	const font = Object.values(StandardFonts).includes(fontName as StandardFonts)
+		? await pdfDoc.embedFont(fontName as StandardFonts)
+		: await pdfDoc.embedFont(readFileSync(join("assets", `${fontName}.ttf`)), { subset: true });
+	const firstPage = pdfDoc.getPages()[0];
+	if (!firstPage) throw new Error("BASE_PDF must contain at least one page");
+	const size = fontSize();
 	firstPage.drawText(text, {
-		x: firstPage.getWidth() / 2 - (text.length * fontSize) / 4,
-		y: firstPage.getHeight() / 2 + fontSize / 2,
-		size: fontSize,
-		font: await pdfDoc.embedFont(font, { subset: true }),
-		color: wrapRGB(93, 97, 103),
+		x: (firstPage.getWidth() - font.widthOfTextAtSize(text, size)) / 2,
+		y: firstPage.getHeight() / 2 + size / 2,
+		size,
+		font,
+		color: rgb(93 / 255, 97 / 255, 103 / 255),
 	});
-
-	const pdfBytes = await pdfDoc.save();
-	writeFileSync(output, pdfBytes);
-}
-
-/**
- * Wraps the RGB values into a Color object
- * @param r Red value
- * @param g Green value
- * @param b Blue value
- */
-function wrapRGB(r: number, g: number, b: number): Color {
-	return rgb(r / 255, g / 255, b / 255);
+	FileUtil.ensureDir(dirname(output));
+	writeFileSync(output, await pdfDoc.save());
 }
